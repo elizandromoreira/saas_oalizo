@@ -86,36 +86,39 @@ class AuthController {
       
       if (error) throw error;
       
-      // Obtendo o usuário autenticado
-      const user = data.user;
-      
-      // Verificar se o usuário é um administrador da plataforma
-      
-      // Definir isPlatformAdmin como false por padrão
-      let isPlatformAdmin = false;
-      
-      try {
-        // Tentar consultar a tabela platform_admins
-        const { data: platformAdmin, error: adminError } = await supabase
-          .from('platform_admins')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
+      // Obtendo o usuário autenticado do Supabase Auth (este objeto pode não ter todos os metadados)
+      const authUser = data.user;
 
-        // Atualizar o valor de isPlatformAdmin com base na consulta
-        isPlatformAdmin = !adminError && platformAdmin !== null;
-      } catch (error) {
-        console.error('Erro ao verificar se o usuário é um SuperAdmin');
+      // Buscar os dados completos do usuário, incluindo app_metadata e user_metadata, usando a API de Admin
+      // Isso é crucial para obter platform_role de app_metadata
+      const { data: adminUserData, error: adminUserError } = await supabaseAdmin.auth.admin.getUserById(authUser.id);
+
+      if (adminUserError) {
+        console.error('Erro ao buscar dados completos do usuário (admin):', adminUserError);
+        // Decide como lidar com este erro. Pode ser um 500 ou tentar continuar com dados limitados.
+        // Por agora, vamos lançar para parar o fluxo e indicar um problema sério.
+        throw adminUserError;
       }
       
+      // Agora 'adminUserData.user' contém app_metadata e user_metadata completos
+      const fullUser = adminUserData.user;
+
+      // Determinar se o usuário é um Platform Admin com base em app_metadata
+      const isPlatformAdmin = fullUser.app_metadata?.platform_role === 'admin';
+      
       // Gerar JWT personalizado
+      const tokenPayload = {
+        id: fullUser.id,
+        email: fullUser.email,
+        // Incluir app_metadata e user_metadata no token para que o auth.middleware possa usá-los
+        app_metadata: fullUser.app_metadata,
+        user_metadata: fullUser.user_metadata
+        // Não precisamos mais de 'isPlatformAdmin' ou 'role' explicitamente no payload do token,
+        // pois auth.middleware irá derivar 'isPlatformAdmin' de app_metadata.
+      };
+      
       const token = jwt.sign(
-        { 
-          id: user.id, 
-          email: user.email,
-          role: user.user_metadata?.role || 'user',
-          isPlatformAdmin: false // Sempre definir como false para evitar o redirecionamento
-        },
+        tokenPayload,
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN }
       );
@@ -134,7 +137,7 @@ class AuthController {
             logo_url
           )
         `)
-        .eq('user_id', user.id);
+        .eq('user_id', fullUser.id);
       
       if (storesError) throw storesError;
       
@@ -156,11 +159,10 @@ class AuthController {
         message: 'Login realizado com sucesso',
         token,
         user: {
-          id: user.id,
-          email: user.email,
-          name: user.user_metadata?.name,
-          role: user.user_metadata?.role || 'user',
-          isPlatformAdmin
+          id: fullUser.id,
+          email: fullUser.email,
+          name: fullUser.user_metadata?.name,
+          isPlatformAdmin: isPlatformAdmin
         },
         stores,
         primaryStore

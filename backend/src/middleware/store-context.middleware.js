@@ -139,6 +139,12 @@ const storeContext = async (req, res, next) => {
  */
 const checkStorePermission = (allowedRoles) => {
   return (req, res, next) => {
+    // Se for Platform Admin, conceder acesso total imediatamente
+    if (req.user && req.user.isPlatformAdmin) {
+      // console.log('[checkStorePermission] Platform Admin detectado, acesso concedido.');
+      return next();
+    }
+
     if (!req.storeContext) {
       console.error('Erro de configuração: storeContext não encontrado na requisição. O middleware storeContext deve ser executado antes de checkStorePermission.');
       return res.status(500).json({
