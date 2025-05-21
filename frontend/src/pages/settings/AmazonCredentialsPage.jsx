@@ -13,7 +13,7 @@ import Modal from '../../components/Modal';
 const AmazonCredentialsPage = () => {
   const { storeId } = useParams();
   const navigate = useNavigate();
-  const { currentStore, hasStoreAccess, refreshStores, stores } = useContext(StoreContext);
+  const { currentStore, hasStoreAccess, refreshStores, updateAmazonCredentialsStatus, stores } = useContext(StoreContext);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -138,8 +138,14 @@ const AmazonCredentialsPage = () => {
         // Check if token was validated
         if (response.data.tokenValid) {
           toast.success('Credentials saved and validated successfully!');
+          
+          // Imediatamente atualizar o status das credenciais no contexto
+          updateAmazonCredentialsStatus(storeId, true);
         } else {
           toast.error('Credentials saved, but could not validate with Amazon. Please verify your data.');
+          
+          // Atualizar como tentativa mas sem sucesso na validação
+          updateAmazonCredentialsStatus(storeId, false);
         }
         
         // Refresh stores list to update the Amazon credentials status
@@ -176,10 +182,16 @@ const AmazonCredentialsPage = () => {
       if (response.data.success) {
         toast.success('Connection with Amazon established successfully!');
         
+        // Imediatamente atualizar o status das credenciais no contexto
+        updateAmazonCredentialsStatus(storeId, true);
+        
         // Refresh stores list to update the Amazon credentials status
         await refreshStores();
       } else {
         toast.error(response.data.message || 'Failed to test connection');
+        
+        // Atualizar como tentativa mas sem sucesso na validação
+        updateAmazonCredentialsStatus(storeId, false);
         
         // Refresh stores list to update the Amazon credentials status
         await refreshStores();
@@ -224,6 +236,9 @@ const AmazonCredentialsPage = () => {
           marketplace_id: ''
         });
         setHasCredentials(false);
+        
+        // Imediatamente atualizar o status das credenciais no contexto
+        updateAmazonCredentialsStatus(storeId, false);
         
         // Refresh stores list to update the Amazon credentials status
         await refreshStores();

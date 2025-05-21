@@ -237,6 +237,34 @@ export const StoreProvider = ({ children }) => {
     }
   }, [currentStore]);
 
+  // Function to update Amazon credentials status
+  const updateAmazonCredentialsStatus = useCallback((storeId, hasCredentials = true) => {
+    // Update in the stores list
+    const updatedStores = stores.map(store => 
+      store.id === storeId 
+        ? { 
+            ...store, 
+            has_amazon_credentials: hasCredentials,
+            has_amazon_credentials_attempted: true
+          } 
+        : store
+    );
+    
+    setStores(updatedStores);
+    localStorage.setItem('stores', JSON.stringify(updatedStores));
+    
+    // Update current store if it's the same
+    if (currentStore && currentStore.id === storeId) {
+      setCurrentStore({ 
+        ...currentStore, 
+        has_amazon_credentials: hasCredentials,
+        has_amazon_credentials_attempted: true
+      });
+    }
+    
+    return true;
+  }, [stores, currentStore]);
+
   return (
     <StoreContext.Provider
       value={{
@@ -248,7 +276,8 @@ export const StoreProvider = ({ children }) => {
         updateStore,
         hasStoreAccess,
         hasPermission,
-        refreshStores
+        refreshStores,
+        updateAmazonCredentialsStatus
       }}
     >
       {children}

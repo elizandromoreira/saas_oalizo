@@ -1,4 +1,4 @@
-import { useState, useContext } from 'react';
+import { useState, useContext, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { 
   HomeIcon, 
@@ -11,21 +11,71 @@ import {
   XMarkIcon,
   PlusIcon,
   SunIcon,
-  MoonIcon
+  MoonIcon,
+  BellIcon
 } from '@heroicons/react/24/outline';
 import { StoreContext } from '../context/StoreContext';
 import { AuthContext } from '../context/AuthContext';
 import Modal from '../components/Modal';
+import apiClient, { setStoreHeader } from '../services/api';
+import eventEmitter from '../utils/eventEmitter';
 
 const MainLayout = () => {
   const { user, logout } = useContext(AuthContext);
-  const { currentStore, stores, switchStore } = useContext(StoreContext);
+  const { currentStore, stores, switchStore, refreshStores } = useContext(StoreContext);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [storeModalOpen, setStoreModalOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') === 'dark');
   const location = useLocation();
   const navigate = useNavigate();
+  const [pendingUsersCount, setPendingUsersCount] = useState(0);
+
+  // Effect para verificar se estamos na página Amazon Credentials e recarregar as lojas
+  useEffect(() => {
+    // Se estamos na página de configuração de credenciais e voltando para outra rota,
+    // devemos atualizar os dados da loja para garantir que o banner seja atualizado
+    const isComingFromCredentialsPage = location.pathname.includes('/amazon-credentials');
+    if (isComingFromCredentialsPage && currentStore) {
+      refreshStores();
+    }
+  }, [location.pathname, refreshStores, currentStore]);
+
+  // Effect to fetch pending users count
+  useEffect(() => {
+    const fetchPendingCount = async () => {
+      if (currentStore?.id) {
+        setStoreHeader(currentStore.id);
+        try {
+          console.log(`[MainLayout] Fetching pending users count for store: ${currentStore.id}`);
+          const response = await apiClient.get(`/stores/${currentStore.id}/users/pending-count`);
+          if (response.data && response.data.success) {
+            console.log('[MainLayout] Pending users count response:', response.data);
+            setPendingUsersCount(response.data.pendingCount || 0);
+          } else {
+            console.error('[MainLayout] Failed to fetch pending users count:', response.data?.message);
+            setPendingUsersCount(0);
+          }
+        } catch (error) {
+          console.error('[MainLayout] Error fetching pending users count:', error);
+          setPendingUsersCount(0);
+        }
+      } else {
+        // Se não há loja atual, zerar a contagem
+        setPendingUsersCount(0);
+      }
+    };
+
+    fetchPendingCount(); // Chamar na montagem e quando currentStore.id mudar
+
+    // Inscrever-se no evento para rebuscar a contagem
+    const unsubscribe = eventEmitter.subscribe('pendingUsersCountChanged', fetchPendingCount);
+
+    // Limpeza: desinscrever-se do evento quando o componente for desmontado ou currentStore.id mudar
+    return () => {
+      unsubscribe();
+    };
+  }, [currentStore?.id]); // Re-executar quando currentStore.id mudar
 
   // Close sidebar on mobile when a route is accessed
   const handleNavigation = () => {
@@ -365,6 +415,24 @@ const MainLayout = () => {
                   <MoonIcon className="h-6 w-6 text-gray-600" />
                 )}
               </button>
+
+              {/* Notification Bell button */}
+              {currentStore && (
+                <button
+                  onClick={() => {
+                    if (currentStore) {
+                      navigate(`/stores/${currentStore.id}/users?status=pending`);
+                    }
+                  }}
+                  className="relative p-1 rounded-full text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 mr-3"
+                  aria-label="Notificações de usuários pendentes"
+                >
+                  <BellIcon className="h-6 w-6" />
+                  {pendingUsersCount > 0 && (
+                    <span className="absolute top-0 right-0 block h-2 w-2 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-600 ring-2 ring-white" />
+                  )}
+                </button>
+              )}
               
               {/* Settings button */}
               {currentStore && (
@@ -431,10 +499,15 @@ const MainLayout = () => {
           {/* Amazon credentials notification */}
           {currentStore && (
             <>
-            {/* Debug info - remover em produção */}
+            {/* Debug info para verificar o estado atual */}
+            {console.log("DEBUG CREDENCIAIS AMAZON:", { 
+              store: currentStore.name,
+              has_credentials: currentStore.has_amazon_credentials, 
+              has_attempted: currentStore.has_amazon_credentials_attempted 
+            })}
             
             {/* Alerta de credenciais não configuradas */}
-            {!currentStore.has_amazon_credentials && !currentStore.has_amazon_credentials_attempted && (
+            {!currentStore.has_amazon_credentials && (
             <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 dark:bg-yellow-900 dark:border-yellow-600">
               <div className="flex">
                 <div className="flex-shrink-0">
