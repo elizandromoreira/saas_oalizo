@@ -23,7 +23,7 @@ class AuthController {
         });
       }
       
-      const { email, password, name, phone, store_id } = req.body;
+      const { email, password, name, phone } = req.body;
       
       // Registrar usuário no Supabase Auth
       const { data, error } = await supabase.auth.signUp({
@@ -39,36 +39,11 @@ class AuthController {
       
       if (error) throw error;
       
-      console.log('Usuário registrado com sucesso:', data.user.id);
-      
-      // Se o store_id for fornecido, solicitar acesso à loja
-      if (store_id) {
-        try {
-          // Adicionar usuário à loja com status pendente
-          const { error: accessError } = await supabaseAdmin
-            .from('user_store_access')
-            .insert({
-              user_id: data.user.id,
-              store_id,
-              role: 'staff', // Papel padrão para novos usuários
-              is_primary: false,
-              status: 'pending' // Status pendente, aguardando aprovação
-            });
-          
-          if (accessError) {
-            console.error('Erro ao solicitar acesso à loja:', accessError);
-          } else {
-            console.log(`Solicitação de acesso criada para a loja ${store_id}`);
-          }
-        } catch (storeError) {
-          console.error('Erro ao processar solicitação de acesso à loja:', storeError);
-          // Continuamos mesmo se houver erro, pois o usuário já foi criado
-        }
-      }
+      console.log('Usuário registrado com sucesso no Supabase Auth:', data.user.id);
       
       res.status(201).json({
         success: true,
-        message: 'Conta criada com sucesso! Verifique seu email para confirmar o cadastro.',
+        message: 'Conta criada com sucesso! Aguarde um administrador designar seu acesso e aprovar sua conta.',
         user: {
           id: data.user.id,
           email: data.user.email

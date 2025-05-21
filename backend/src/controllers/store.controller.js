@@ -142,6 +142,94 @@ class StoreController {
   }
 
   /**
+   * Lista todas as lojas que um USUÁRIO ESPECÍFICO tem acesso.
+   * Requer permissão de administrador da plataforma ou do sistema para ser acessada.
+   * @param {Object} req - Requisição Express, esperando req.params.userId
+   * @param {Object} res - Resposta Express
+   */
+  static async getStoresForSpecificUser(req, res) {
+    try {
+      const { userId } = req.params; // userId do usuário alvo
+      const requestingUserId = req.user.id; // userId de quem está fazendo a requisição
+
+      // TODO: Adicionar verificação de permissão aqui.
+      // Por exemplo, apenas um admin da plataforma ou um owner de uma loja
+      // onde o targetUser também está, poderia ver essas informações.
+      // Por enquanto, para simplificar, vamos permitir (mas isso precisa ser revisto).
+      console.log(`Usuário ${requestingUserId} está solicitando lojas para o usuário ${userId}`);
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'User ID é obrigatório nos parâmetros da rota.',
+        });
+      }
+
+      // Buscar lojas que o usuário alvo tem acesso
+      const { data, error } = await supabaseAdmin // Usar supabaseAdmin para garantir que podemos ver
+        .from('user_store_access')
+        .select(`
+          id,
+          role,
+          status,
+          is_primary,
+          stores:store_id (
+            id,
+            name,
+            description,
+            logo_url,
+            is_active,
+            created_at,
+            updated_at
+          )
+        `)
+        .eq('user_id', userId);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        return res.json({
+          success: true,
+          stores: [],
+          message: 'Usuário não encontrado ou não tem acesso a nenhuma loja.'
+        });
+      }
+
+      // Formatar os dados para retornar apenas as lojas com informações de acesso
+      const stores = data.map(access => {
+        if (!access.stores) {
+          // Caso raro onde o store_id em user_store_access não corresponde a uma loja existente
+          console.warn(`Registro de acesso ID ${access.id} para usuário ${userId} refere-se a uma loja inexistente (store_id: ${access.store_id}).`);
+          return null;
+        }
+        return {
+          store_id: access.stores.id,
+          store_name: access.stores.name,
+          // Adicione outros campos da loja que você quer mostrar no modal
+          // description: access.stores.description, 
+          // logo_url: access.stores.logo_url,
+          role: access.role,
+          status: access.status, // Importante para mostrar o status do usuário na loja
+          is_primary: access.is_primary,
+          access_id: access.id // ID da tabela user_store_access
+        };
+      }).filter(store => store !== null); // Remover quaisquer nulos se houver lojas inexistentes
+
+      res.json({
+        success: true,
+        stores
+      });
+    } catch (error) {
+      console.error(`Erro ao listar lojas para o usuário ${req.params.userId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao listar lojas do usuário especificado',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
    * Obtém detalhes de uma loja específica
    * @param {Object} req - Requisição Express
    * @param {Object} res - Resposta Express
@@ -327,14 +415,26 @@ class StoreController {
   static async getStoreUsers(req, res) {
     try {
       const { storeId } = req.params;
+      const { status: statusFilter } = req.query; // Ler o parâmetro de status da query
       
-      console.log(`Buscando usuários para loja ${storeId}`);
+      if (statusFilter) {
+        console.log(`Buscando usuários para loja ${storeId} com status '${statusFilter}'`);
+      } else {
+        console.log(`Buscando usuários para loja ${storeId}`);
+      }
       
-      // Buscar usuários com acesso à loja
-      const { data: accessData, error: accessError } = await supabaseAdmin
+      // Construir a query base
+      let query = supabaseAdmin
         .from('user_store_access')
         .select('id, user_id, role, is_primary, status, created_at')
         .eq('store_id', storeId);
+      
+      // Adicionar filtro de status se fornecido
+      if (statusFilter) {
+        query = query.eq('status', statusFilter);
+      }
+      
+      const { data: accessData, error: accessError } = await query;
       
       if (accessError) {
         console.error(`Erro ao buscar acessos para a loja ${storeId}:`, accessError);
@@ -558,7 +658,7 @@ class StoreController {
             store_id: storeId,
             role,
             is_primary: false,
-            status: 'active' // Status ativo para usuários adicionados diretamente
+            status: 'pending'
           })
           .select()
           .single();
@@ -570,7 +670,7 @@ class StoreController {
         
         res.status(201).json({
           success: true,
-          message: 'Usuário adicionado à loja com sucesso',
+          message: 'Usuário adicionado à loja com status pendente. Aprove o acesso para ativá-lo.',
           access: {
             ...access,
             user: {
@@ -992,7 +1092,7 @@ class StoreController {
       // 3. Tentar buscar lista completa de usuários para verificar se está sendo retornado pela API
       const { data: authList, error: authListError } = await supabaseAdmin.auth.admin.listUsers({
         page: 1,
-        perPage: 100
+        perPage: 100 // Ajustar conforme necessidade, mas 100 é um bom começo
       });
       
       let isInList = false;
@@ -1020,6 +1120,175 @@ class StoreController {
       });
     }
   }
-}
+
+  /**
+   * Lista usuários candidatos que ainda não pertencem à loja especificada.
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async getCandidateUsers(req, res) {
+    try {
+      const { storeId } = req.params;
+      const requestingUserId = req.user.id; // ID do usuário que está fazendo a requisição
+
+      console.log(`Buscando usuários candidatos para a loja ${storeId}, requisitado por ${requestingUserId}`);
+
+      // Passo 1: Obter todos os IDs de usuários que JÁ TÊM acesso a esta loja específica.
+      const { data: usersWithAccess, error: accessError } = await supabase
+        .from('user_store_access')
+        .select('user_id')
+        .eq('store_id', storeId);
+
+      if (accessError) {
+        console.error('Erro ao buscar usuários com acesso à loja:', accessError);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao buscar usuários com acesso.'
+        });
+      }
+
+      const userIdsWithAccess = usersWithAccess.map(access => access.user_id);
+      // Adicionar o próprio usuário solicitante à lista de exclusão,
+      // para que ele não apareça como candidato para sua própria loja (se aplicável no contexto da UI)
+      // Embora o filtro principal abaixo já deva cuidar disso se ele tiver acesso.
+      // Mas é uma segurança caso ele não tenha user_store_access mas seja, por ex., o criador.
+      if (!userIdsWithAccess.includes(requestingUserId)) {
+         // userIdsWithAccess.push(requestingUserId); // Comentado pois pode não ser desejável
+      }
+
+
+      // Passo 2: Listar todos os usuários do sistema (auth.users)
+      // Idealmente, paginar ou limitar isso se houver muitos usuários no total.
+      // Para este exemplo, vamos buscar um lote. Considere paginação para produção.
+      const { data: allAuthUsersResponse, error: allUsersError } = await supabaseAdmin.auth.admin.listUsers({
+        // page: 1, // Adicionar paginação se necessário
+        // perPage: 1000 // Ajustar conforme a necessidade
+      });
+      
+
+      if (allUsersError) {
+        console.error('Erro ao listar todos os usuários do sistema (auth):', allUsersError);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao buscar lista completa de usuários.'
+        });
+      }
+      const allAuthUsers = allAuthUsersResponse.users;
+
+
+      // Passo 3: Filtrar os usuários de auth.users para encontrar aqueles que NÃO ESTÃO em userIdsWithAccess.
+      // E também excluir o usuário especial.
+      const specialUserId = 'c0a70134-30da-40de-a4aa-5f4e1cd84ff2';
+      const candidateUsers = allAuthUsers.filter(user =>
+        !userIdsWithAccess.includes(user.id) && user.id !== requestingUserId && user.id !== specialUserId
+      ).map(user => ({
+        id: user.id,
+        email: user.email,
+        name: user.user_metadata?.name,
+        phone: user.user_metadata?.phone,
+        // Adicionar outros campos relevantes, se necessário
+      }));
+      
+
+      res.json({
+        success: true,
+        users: candidateUsers
+      });
+
+    } catch (error) {
+      console.error('Erro ao buscar usuários candidatos:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno ao buscar usuários candidatos.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Conta o número de usuários com status 'pending' para uma loja específica.
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async getPendingUsersCount(req, res) {
+    try {
+      const { storeId } = req.params;
+      console.log(`[DEBUG getPendingUsersCount] Store ID recebido dos params: ${storeId}`);
+
+      if (!storeId) {
+        return res.status(400).json({ success: false, message: 'Store ID é obrigatório.' });
+      }
+
+      // Alterar para supabaseAdmin para ignorar RLS para a contagem
+      const { count, error } = await supabaseAdmin 
+        .from('user_store_access')
+        .select('*', { count: 'exact', head: true }) 
+        .eq('store_id', storeId)
+        .eq('status', 'pending');
+
+      if (error) {
+        console.error(`[DEBUG getPendingUsersCount] Erro da query Supabase para store ${storeId}:`, error);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao obter contagem de usuários pendentes.',
+          error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+      }
+
+      console.log(`[DEBUG getPendingUsersCount] Contagem retornada pela query para store ${storeId}: ${count}`);
+
+      res.json({
+        success: true,
+        storeId,
+        pendingCount: count === null ? 0 : count 
+      });
+
+    } catch (error) {
+      console.error(`[DEBUG getPendingUsersCount] Erro inesperado no catch para store ${storeId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno do servidor ao contar usuários pendentes.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Lista todas as lojas do sistema.
+   * TODO: Adicionar verificação de permissão (ex: apenas admin da plataforma).
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async getAllStoresSystem(req, res) {
+    try {
+      // Por enquanto, qualquer usuário autenticado pode chamar, mas isso deve ser restrito.
+      console.log(`Usuário ${req.user.id} solicitando todas as lojas do sistema.`);
+
+      const { data: stores, error } = await supabaseAdmin
+        .from('stores')
+        .select('id, name, description, logo_url, is_active, created_at')
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('Erro ao buscar todas as lojas do sistema:', error);
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        stores: stores || []
+      });
+
+    } catch (error) {
+      console.error('Erro inesperado em getAllStoresSystem:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao buscar todas as lojas do sistema.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+} // Fim da classe StoreController
 
 module.exports = StoreController;
