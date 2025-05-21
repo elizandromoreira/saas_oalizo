@@ -26,14 +26,8 @@ const LoginPage = () => {
       const result = await login(data);
       
       if (result.success) {
-        // Use the redirectPath from login result
-        if (result.redirectPath) {
-          navigate(result.redirectPath);
-        } else if (result.stores && result.stores.length > 0) {
-          navigate('/dashboard');
-        } else {
-          navigate('/stores/new');
-        }
+        // Always redirect to dashboard regardless of user type
+        navigate('/dashboard', { replace: true });
       } else {
         toast.error('Login failed. Please check your credentials.');
       }

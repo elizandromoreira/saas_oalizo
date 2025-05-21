@@ -80,15 +80,11 @@ export const AuthProvider = ({ children }) => {
         
         toast.success('Login successful!');
         
-        // Determine redirect path based on user type
+        // Always redirect to dashboard regardless of admin status
         let redirectPath = '/dashboard';
         
-        // If platform admin, redirect to admin dashboard
-        if (data.user.isPlatformAdmin) {
-          redirectPath = '/admin/dashboard';
-        } 
-        // If not admin but has stores, check if multiple stores
-        else if (data.stores && data.stores.length > 0) {
+        // Only redirect to stores if multiple stores and no primary
+        if (data.stores && data.stores.length > 0) {
           // If multiple stores and no primary store, go to store selector
           if (data.stores.length > 1 && !data.primaryStore) {
             redirectPath = '/stores';
