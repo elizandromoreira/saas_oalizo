@@ -12,26 +12,8 @@ const storeContext = async (req, res, next) => {
                    req.params.storeId || 
                    (req.body && req.body.store_id);
     
-    console.log('Store context middleware - Request info:', {
-      method: req.method,
-      url: req.originalUrl,
-      headers: {
-        authorization: req.headers.authorization ? 'Present' : 'Missing',
-        'x-store-id': req.headers['x-store-id'] || 'Missing'
-      },
-      userId: req.user?.id || 'Unknown',
-      storeId: storeId || 'Not found',
-      isPlatformAdmin: req.user?.isPlatformAdmin || false
-    });
-    
     if (!storeId) {
-      console.error('Store ID not found in request:', {
-        headers: req.headers['x-store-id'],
-        query: req.query.store_id,
-        params: req.params.storeId,
-        body: req.body && req.body.store_id,
-        url: req.originalUrl
-      });
+      console.error('Store ID não encontrado na requisição');
       
       return res.status(400).json({
         success: false,
@@ -41,32 +23,13 @@ const storeContext = async (req, res, next) => {
     
     // Declare accessRecord outside the try block so it's available throughout the function
     let accessRecord = null;
-
-    console.log('Verificando se o usuário é um SuperAdmin:', {
-      userId: req.user?.id,
-      isPlatformAdmin: req.user?.isPlatformAdmin
-    });
     
     // SOLUÇÃO ESPECÍFICA: Permitir que o usuário elizandromartim@gmail.com acesse todas as lojas
     // Verificar se o usuário é elizandromartim@gmail.com pelo ID
     if (req.user.id === 'c0a70134-30da-40de-a4aa-5f4e1cd84ff2') {
-      console.log('Usuário elizandromartim@gmail.com detectado, permitindo acesso a todas as lojas');
+      console.log('Usuário elizandromartim@gmail.com: acesso especial à loja');
       
       try {
-        // Buscar informações da loja diretamente
-        console.log(`Buscando informações da loja ${storeId} para usuário especial...`);
-        
-        // Primeiro, verificar se a loja existe usando a API de serviço do Supabase
-        // Isso ignora as políticas RLS
-        const { data: storeExists, error: existsError } = await supabase
-          .rpc('check_table_exists', { table_name: 'stores' });
-        
-        if (existsError) {
-          console.error('Erro ao verificar se a tabela stores existe:', existsError);
-        } else {
-          console.log('Tabela stores existe:', storeExists);
-        }
-        
         // Tentar buscar a loja com uma consulta mais simples
         const { data: allStores, error: allStoresError } = await supabase
           .from('stores')
@@ -75,15 +38,10 @@ const storeContext = async (req, res, next) => {
         if (allStoresError) {
           console.error('Erro ao buscar todas as lojas:', allStoresError);
         } else {
-          console.log(`Encontradas ${allStores.length} lojas no total`);
-          console.log('IDs das lojas:', allStores.map(store => store.id));
-          
           // Verificar se a loja específica existe
           const storeInfo = allStores.find(store => store.id === storeId);
           
           if (storeInfo) {
-            console.log('Loja encontrada:', storeInfo);
-            
             if (!storeInfo.is_active) {
               return res.status(403).json({
                 success: false,
@@ -102,7 +60,7 @@ const storeContext = async (req, res, next) => {
             // Continuar para o próximo middleware ou controlador
             return next();
           } else {
-            console.error(`Loja com ID ${storeId} não encontrada na lista de lojas`);
+            console.error(`Loja com ID ${storeId} não encontrada`);
           }
         }
         
@@ -114,7 +72,7 @@ const storeContext = async (req, res, next) => {
           .single();
         
         if (storeError) {
-          console.error('Erro ao buscar informações da loja para usuário especial:', storeError);
+          console.error('Erro ao buscar informações da loja para usuário especial');
           return res.status(404).json({
             success: false,
             message: 'Loja não encontrada'
@@ -139,7 +97,7 @@ const storeContext = async (req, res, next) => {
         // Continuar para o próximo middleware ou controlador
         return next();
       } catch (error) {
-        console.error('Erro ao processar acesso especial à loja:', error);
+        console.error('Erro ao processar acesso especial à loja');
         return res.status(500).json({
           success: false,
           message: 'Erro interno ao verificar acesso à loja'
@@ -147,43 +105,6 @@ const storeContext = async (req, res, next) => {
       }
     }
 
-    // Verificar se o usuário é um SuperAdmin
-    if (req.user.isPlatformAdmin) {
-      console.log('SuperAdmin detected, bypassing store access check for user:', req.user.id);
-      
-      // Buscar informações da loja diretamente
-      const { data: storeInfo, error: storeError } = await supabase
-        .from('stores')
-        .select('name, is_active')
-        .eq('id', storeId)
-        .single();
-      
-      if (storeError || !storeInfo) {
-        console.error('Erro ao buscar informações da loja para SuperAdmin:', storeError);
-        return res.status(404).json({
-          success: false,
-          message: 'Loja não encontrada'
-        });
-      }
-      
-      if (!storeInfo.is_active) {
-        return res.status(403).json({
-          success: false,
-          message: 'Esta loja está desativada'
-        });
-      }
-      
-      // Adicionar contexto da loja à requisição para SuperAdmin
-      req.storeContext = {
-        storeId,
-        storeName: storeInfo.name,
-        role: 'owner', // SuperAdmin tem acesso equivalente a owner
-        isSuperAdmin: true
-      };
-      
-      // Continuar para o próximo middleware ou controlador
-      return next();
-    }
     // Verificar se o usuário é um SuperAdmin
     if (req.user.isPlatformAdmin) {
       console.log('SuperAdmin detected, bypassing store access check for user:', req.user.id);
@@ -246,11 +167,11 @@ const storeContext = async (req, res, next) => {
           
           if (storeCreatedAt > fiveMinutesAgo) {
             isNewStore = true;
-            console.log(`Store ${storeId} was created recently`);
+            console.log(`Loja ${storeId} foi criada recentemente`);
           }
         }
       } catch (storeCheckError) {
-        console.error('Error checking store existence:', storeCheckError);
+        console.error('Erro ao verificar existência da loja');
       }
       
       // Verify if the user has access to the store
@@ -260,20 +181,18 @@ const storeContext = async (req, res, next) => {
         .eq('user_id', req.user.id)
         .eq('store_id', storeId);
       
-      // Enhanced logging for troubleshooting
-      console.log('Store access check result:', {
-        userId: req.user.id,
-        storeId: storeId,
-        hasAccess: data && data.length > 0,
-        role: data && data.length > 0 ? data[0].role : 'None',
-        error: error ? error.message : null,
-        recordsFound: data ? data.length : 0,
-        isNewStore: isNewStore
-      });
+      // Logging simplificado
+      if (data && data.length > 0) {
+        console.log(`Acesso à loja verificado: usuário ${req.user.id} tem role ${data[0].role}`);
+      } else if (error) {
+        console.error('Erro ao verificar acesso à loja');
+      } else {
+        console.log(`Usuário ${req.user.id} não tem acesso à loja ${storeId}`);
+      }
       
       // If it's a new store and user has no access, automatically grant access
       if (isNewStore && (!data || data.length === 0)) {
-        console.log(`Auto-granting access for user ${req.user.id} to new store ${storeId}`);
+        console.log(`Concedendo acesso automático para usuário à nova loja ${storeId}`);
         
         try {
           // Add user as owner of the store
@@ -287,12 +206,12 @@ const storeContext = async (req, res, next) => {
             });
           
           if (insertError) {
-            console.error('Error granting access to new store:', insertError);
+            console.error('Erro ao conceder acesso à nova loja');
             
             // Continue with the request anyway, using temporary access
             req.storeContext = {
               storeId,
-              storeName: storeData?.name || 'New Store',
+              storeName: storeData?.name || 'Nova Loja',
               role: 'owner',
               isTemporaryAccess: true
             };
@@ -303,18 +222,18 @@ const storeContext = async (req, res, next) => {
           // Set context and continue
           req.storeContext = {
             storeId,
-            storeName: storeData?.name || 'New Store',
+            storeName: storeData?.name || 'Nova Loja',
             role: 'owner',
             isNewAccessGranted: true
           };
           
           return next();
         } catch (grantError) {
-          console.error('Exception granting access to new store:', grantError);
+          console.error('Exceção ao conceder acesso à nova loja');
           // Continue with temporary access
           req.storeContext = {
             storeId,
-            storeName: storeData?.name || 'New Store',
+            storeName: storeData?.name || 'Nova Loja',
             role: 'owner',
             isTemporaryAccess: true
           };
@@ -334,7 +253,7 @@ const storeContext = async (req, res, next) => {
       // Get the first record (there should only be one)
       accessRecord = data[0];
     } catch (middlewareError) {
-      console.error('Exception in store context middleware:', middlewareError);
+      console.error('Exceção no middleware de contexto de loja');
       return res.status(500).json({
         success: false,
         message: 'Erro interno ao verificar acesso à loja'
@@ -343,7 +262,7 @@ const storeContext = async (req, res, next) => {
     
     // Check if we have a valid access record
     if (!accessRecord || !accessRecord.stores) {
-      console.error('Missing access record or store information', { accessRecord });
+      console.error('Informação de acesso ou loja ausente');
       
       // If we have store data but no access record, let's create a temporary context
       if (storeData) {
@@ -394,15 +313,6 @@ const storeContext = async (req, res, next) => {
  */
 const checkStorePermission = (allowedRoles) => {
   return (req, res, next) => {
-    console.log('Permission check middleware:', {
-      url: req.originalUrl,
-      method: req.method,
-      hasStoreContext: !!req.storeContext,
-      userRole: req.storeContext?.role || 'Unknown',
-      allowedRoles: allowedRoles,
-      isAllowed: req.storeContext && allowedRoles.includes(req.storeContext.role)
-    });
-    
     // Verificar se o middleware de contexto de loja foi executado antes
     if (!req.storeContext) {
       return res.status(500).json({
@@ -412,7 +322,10 @@ const checkStorePermission = (allowedRoles) => {
     }
     
     // Verificar se a role do usuário está na lista de roles permitidas
-    if (!allowedRoles.includes(req.storeContext.role)) {
+    const isAllowed = allowedRoles.includes(req.storeContext.role);
+    
+    if (!isAllowed) {
+      console.log(`Permissão negada: usuário com role ${req.storeContext.role} tentou acessar rota que requer ${allowedRoles.join(', ')}`);
       return res.status(403).json({
         success: false,
         message: 'Permissão negada para esta operação'

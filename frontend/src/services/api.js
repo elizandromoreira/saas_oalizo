@@ -114,6 +114,8 @@ const storeService = {
   getStoreUsers: (storeId) => api.get(`/stores/${storeId}/users`),
   addUserToStore: (storeId, userData) => api.post(`/stores/${storeId}/users`, userData),
   updateUserRole: (storeId, userId, role) => api.put(`/stores/${storeId}/users/${userId}`, { role }),
+  updateUserStatus: (storeId, userId, status) => api.put(`/stores/${storeId}/users/${userId}/status`, { status }),
+  updateUserMetadata: (storeId, userId, userData) => api.put(`/stores/${storeId}/users/${userId}/metadata`, userData),
   removeUserFromStore: (storeId, userId) => api.delete(`/stores/${storeId}/users/${userId}`),
 };
 

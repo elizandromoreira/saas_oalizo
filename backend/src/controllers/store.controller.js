@@ -328,39 +328,88 @@ class StoreController {
     try {
       const { storeId } = req.params;
       
+      console.log(`Buscando usuários para loja ${storeId}`);
+      
       // Buscar usuários com acesso à loja
-      const { data, error } = await supabase
+      const { data: accessData, error: accessError } = await supabaseAdmin
         .from('user_store_access')
-        .select(`
-          id,
-          role,
-          is_primary,
-          created_at,
-          users:user_id (
-            id,
-            email,
-            raw_user_meta_data
-          )
-        `)
+        .select('id, user_id, role, is_primary, status, created_at')
         .eq('store_id', storeId);
       
-      if (error) throw error;
+      if (accessError) {
+        console.error(`Erro ao buscar acessos para a loja ${storeId}:`, accessError);
+        throw accessError;
+      }
       
-      // Formatar dados para retornar apenas usuários com informações de acesso
-      const users = data.map(access => ({
-        id: access.users.id,
-        email: access.users.email,
-        name: access.users.raw_user_meta_data?.name,
-        role: access.role,
-        is_primary: access.is_primary,
-        access_id: access.id,
-        created_at: access.created_at
-      }));
+      console.log(`Encontrados ${accessData?.length || 0} acessos para a loja`);
       
-      res.json({
-        success: true,
-        users
-      });
+      if (!accessData || accessData.length === 0) {
+        return res.json({
+          success: true,
+          users: []
+        });
+      }
+      
+      // Buscar detalhes dos usuários diretamente
+      const userIds = accessData.map(access => access.user_id);
+      console.log(`Buscando detalhes para ${userIds.length} usuários`);
+      
+      try {
+        // Buscar dados usando a API admin do Supabase Auth
+        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.listUsers();
+        
+        if (authError) {
+          console.error('Erro ao listar usuários:', authError);
+          throw authError;
+        }
+        
+        console.log(`Total de usuários encontrados na API Auth: ${authData?.users?.length}`);
+        
+        // Filtrar os usuários encontrados pelo IDs que temos
+        const filteredUsers = authData.users.filter(user => userIds.includes(user.id));
+        console.log(`Encontrados ${filteredUsers.length} usuários via admin API`);
+        
+        // Combinar os dados de acesso com os usuários
+        const users = accessData.map(access => {
+          const user = filteredUsers.find(u => u.id === access.user_id) || {};
+          return {
+            id: access.user_id,
+            email: user.email || 'email@indisponivel.com',
+            name: user.user_metadata?.name,
+            phone: user.user_metadata?.phone,
+            role: access.role,
+            is_primary: access.is_primary,
+            status: access.status || 'active', // Usar o status ou definir como 'active' por padrão
+            access_id: access.id,
+            created_at: access.created_at
+          };
+        });
+        
+        console.log(`Retornando ${users.length} usuários`);
+        return res.json({
+          success: true,
+          users
+        });
+      } catch (userFetchError) {
+        console.error('Falha ao buscar detalhes dos usuários:', userFetchError);
+        
+        // Fallback: retornar apenas dados básicos
+        const users = accessData.map(access => ({
+          id: access.user_id,
+          email: 'email@indisponivel.com',
+          role: access.role,
+          is_primary: access.is_primary,
+          status: access.status || 'active',
+          access_id: access.id,
+          created_at: access.created_at
+        }));
+        
+        return res.json({
+          success: true,
+          users,
+          warning: "Detalhes completos dos usuários indisponíveis"
+        });
+      }
     } catch (error) {
       console.error(`Erro ao listar usuários da loja ${req.params.storeId}:`, error);
       res.status(500).json({
@@ -379,7 +428,7 @@ class StoreController {
   static async addUserToStore(req, res) {
     try {
       const { storeId } = req.params;
-      const { email, role } = req.body;
+      const { email, role, name, phone, password, createNewUser } = req.body;
       
       // Verificar erros de validação
       const errors = validationResult(req);
@@ -390,58 +439,149 @@ class StoreController {
         });
       }
       
-      // Encontrar o usuário pelo email
-      const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserByEmail(email);
+      console.log(`Tentando adicionar usuário ${email} à loja ${storeId} com papel ${role}`);
       
-      if (userError || !userData) {
+      // Usar API de listagem de usuários
+      console.log('Tentando buscar usuário via API listUsers');
+      const { data: authSearch, error: authError } = await supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 100
+      });
+      
+      if (authError) {
+        console.error('Erro ao listar usuários:', authError);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao buscar usuário'
+        });
+      }
+      
+      // Filtrar usuários pelo email
+      let user = authSearch?.users?.find(u => u.email === email);
+      
+      // Se o usuário não for encontrado e createNewUser estiver habilitado, criar novo usuário
+      if (!user && createNewUser) {
+        if (!password) {
+          return res.status(400).json({
+            success: false,
+            message: 'Senha obrigatória para criar novo usuário'
+          });
+        }
+        
+        console.log(`Usuário não encontrado. Criando novo usuário: ${email}`);
+        
+        // Criar usuário com metadata
+        const metadata = {
+          ...(name && { name }),
+          ...(phone && { phone })
+        };
+        
+        const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: metadata
+        });
+        
+        if (createError) {
+          console.error('Erro ao criar novo usuário:', createError);
+          return res.status(500).json({
+            success: false,
+            message: 'Erro ao criar novo usuário',
+            error: createError.message
+          });
+        }
+        
+        console.log(`Novo usuário criado com sucesso: ${newUser.user.email}`);
+        user = newUser.user;
+      } else if (!user) {
         return res.status(404).json({
           success: false,
-          message: 'Usuário não encontrado'
+          message: 'Usuário não encontrado. Marque a opção "Criar novo usuário" para registrar este email.'
         });
+      } else {
+        console.log(`Usuário encontrado via listUsers: ${user.email}`);
       }
       
-      // Verificar se o usuário já tem acesso à loja
-      const { data: existingAccess, error: accessCheckError } = await supabase
-        .from('user_store_access')
-        .select('id')
-        .eq('user_id', userData.id)
-        .eq('store_id', storeId);
-      
-      if (accessCheckError) throw accessCheckError;
-      
-      if (existingAccess && existingAccess.length > 0) {
-        return res.status(409).json({
-          success: false,
-          message: 'Este usuário já tem acesso a esta loja'
-        });
-      }
-      
-      // Adicionar o usuário à loja
-      // Usando supabaseAdmin para contornar as políticas de RLS
-      const { data: access, error: accessError } = await supabaseAdmin
-        .from('user_store_access')
-        .insert({
-          user_id: userData.id,
-          store_id: storeId,
-          role,
-          is_primary: false
-        })
-        .select()
-        .single();
-      
-      if (accessError) throw accessError;
-      
-      res.status(201).json({
-        success: true,
-        message: 'Usuário adicionado à loja com sucesso',
-        access: {
-          ...access,
-          user: {
-            id: userData.id,
-            email: userData.email
-          }
+      // Atualizar os metadados do usuário se necessário e se o usuário existir
+      if (user && (name || phone)) {
+        const updatedMetadata = {
+          ...user.user_metadata,
+          ...(name && { name }),
+          ...(phone && { phone })
+        };
+        
+        // Atualizar os metadados do usuário
+        const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+          user.id,
+          { user_metadata: updatedMetadata }
+        );
+        
+        if (updateError) {
+          console.error('Erro ao atualizar metadados do usuário:', updateError);
+        } else {
+          console.log('Metadados do usuário atualizados com sucesso');
+          user.user_metadata = updatedMetadata;
         }
-      });
+      }
+      
+      // Prosseguir com o usuário encontrado
+      return await processUserAdd(user.id, user.email, user.user_metadata);
+      
+      // Função auxiliar para processar a adição do usuário
+      async function processUserAdd(userId, userEmail, userMetadata = {}) {
+        // Verificar se o usuário já tem acesso à loja
+        const { data: existingAccess, error: accessCheckError } = await supabase
+          .from('user_store_access')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('store_id', storeId);
+        
+        if (accessCheckError) {
+          console.error('Erro ao verificar acesso existente:', accessCheckError);
+          throw accessCheckError;
+        }
+        
+        if (existingAccess && existingAccess.length > 0) {
+          return res.status(409).json({
+            success: false,
+            message: 'Este usuário já tem acesso a esta loja'
+          });
+        }
+        
+        // Adicionar o usuário à loja
+        // Usando supabaseAdmin para contornar as políticas de RLS
+        const { data: access, error: accessError } = await supabaseAdmin
+          .from('user_store_access')
+          .insert({
+            user_id: userId,
+            store_id: storeId,
+            role,
+            is_primary: false,
+            status: 'active' // Status ativo para usuários adicionados diretamente
+          })
+          .select()
+          .single();
+        
+        if (accessError) {
+          console.error('Erro ao adicionar usuário à loja:', accessError);
+          throw accessError;
+        }
+        
+        res.status(201).json({
+          success: true,
+          message: 'Usuário adicionado à loja com sucesso',
+          access: {
+            ...access,
+            user: {
+              id: userId,
+              email: userEmail,
+              name: userMetadata?.name,
+              phone: userMetadata?.phone
+            }
+          }
+        });
+      }
     } catch (error) {
       console.error(`Erro ao adicionar usuário à loja ${req.params.storeId}:`, error);
       res.status(500).json({
@@ -508,6 +648,192 @@ class StoreController {
       res.status(500).json({
         success: false,
         message: 'Erro ao atualizar role do usuário',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Atualiza o status de um usuário em uma loja
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async updateUserStatus(req, res) {
+    try {
+      const { storeId, userId } = req.params;
+      const { status } = req.body;
+      
+      // Verificar erros de validação
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+          success: false,
+          errors: errors.array() 
+        });
+      }
+      
+      // Verificar se o status é válido
+      const validStatuses = ['active', 'pending', 'suspended'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Status inválido. Use: active, pending ou suspended'
+        });
+      }
+      
+      // Verificar se o usuário que está sendo atualizado não é o próprio solicitante
+      if (userId === req.user.id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Não é possível alterar seu próprio status'
+        });
+      }
+      
+      // Verificar se o usuário atual tem permissão para atualizar status (deve ser owner ou admin)
+      const { data: userAccess, error: accessError } = await supabase
+        .from('user_store_access')
+        .select('role')
+        .eq('user_id', req.user.id)
+        .eq('store_id', storeId)
+        .single();
+      
+      if (accessError || !userAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Acesso negado a esta loja'
+        });
+      }
+      
+      if (!['owner', 'admin'].includes(userAccess.role)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Apenas proprietários e administradores podem atualizar o status dos usuários'
+        });
+      }
+      
+      // Atualizar o status do usuário
+      // Usando supabaseAdmin para contornar as políticas de RLS
+      const { data, error } = await supabaseAdmin
+        .from('user_store_access')
+        .update({ status })
+        .eq('user_id', userId)
+        .eq('store_id', storeId)
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      if (!data) {
+        return res.status(404).json({
+          success: false,
+          message: 'Acesso não encontrado'
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Status do usuário atualizado com sucesso',
+        access: data
+      });
+    } catch (error) {
+      console.error(`Erro ao atualizar status do usuário:`, error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao atualizar status do usuário',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Atualiza os metadados do usuário (nome, telefone, etc)
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async updateUserMetadata(req, res) {
+    try {
+      const { storeId, userId } = req.params;
+      const { name, phone } = req.body;
+      
+      // Verificar erros de validação
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+          success: false,
+          errors: errors.array() 
+        });
+      }
+      
+      // Verificar se o usuário tem permissão (deve ser owner ou admin)
+      const { data: userAccess, error: accessError } = await supabase
+        .from('user_store_access')
+        .select('role')
+        .eq('user_id', req.user.id)
+        .eq('store_id', storeId)
+        .single();
+      
+      if (accessError || !userAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Acesso negado a esta loja'
+        });
+      }
+      
+      if (!['owner', 'admin'].includes(userAccess.role)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Apenas proprietários e administradores podem atualizar metadados dos usuários'
+        });
+      }
+      
+      // Obter metadados atuais do usuário
+      const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId);
+      
+      if (userError || !userData) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuário não encontrado'
+        });
+      }
+      
+      // Combinar os metadados existentes com os novos
+      const currentMetadata = userData.user.user_metadata || {};
+      const updatedMetadata = {
+        ...currentMetadata,
+        ...(name && { name }),
+        ...(phone && { phone })
+      };
+      
+      // Atualizar os metadados do usuário
+      const { data: updatedUser, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+        userId,
+        { user_metadata: updatedMetadata }
+      );
+      
+      if (updateError) {
+        console.error('Erro ao atualizar metadados do usuário:', updateError);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao atualizar metadados do usuário',
+          error: updateError.message
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Metadados do usuário atualizados com sucesso',
+        user: {
+          id: updatedUser.user.id,
+          email: updatedUser.user.email,
+          name: updatedUser.user.user_metadata?.name,
+          phone: updatedUser.user.user_metadata?.phone
+        }
+      });
+    } catch (error) {
+      console.error(`Erro ao atualizar metadados do usuário:`, error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao atualizar metadados do usuário',
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
@@ -611,6 +937,86 @@ class StoreController {
         success: false,
         message: 'Erro ao excluir loja',
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Método temporário para verificar se um usuário específico existe e tem acesso à loja
+   * @param {Object} req - Requisição Express
+   * @param {Object} res - Resposta Express
+   */
+  static async checkUserAccess(req, res) {
+    try {
+      const { storeId, userId } = req.params;
+      
+      console.log(`DIAGNÓSTICO: Verificando acesso do usuário ${userId} à loja ${storeId}`);
+      
+      // 1. Verificar se o usuário existe no Auth
+      const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId);
+      
+      if (userError) {
+        return res.json({
+          success: false,
+          message: `Erro ao verificar usuário: ${userError.message}`,
+          exists: false
+        });
+      }
+      
+      if (!userData || !userData.user) {
+        return res.json({
+          success: false,
+          message: 'Usuário não encontrado na tabela auth.users',
+          exists: false
+        });
+      }
+      
+      // 2. Verificar se o usuário tem acesso à loja
+      const { data: accessData, error: accessError } = await supabaseAdmin
+        .from('user_store_access')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('store_id', storeId);
+      
+      if (accessError) {
+        return res.json({
+          success: false,
+          message: `Erro ao verificar acesso: ${accessError.message}`,
+          user: userData.user,
+          hasAccess: false
+        });
+      }
+      
+      const hasAccess = accessData && accessData.length > 0;
+      
+      // 3. Tentar buscar lista completa de usuários para verificar se está sendo retornado pela API
+      const { data: authList, error: authListError } = await supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 100
+      });
+      
+      let isInList = false;
+      if (!authListError && authList) {
+        isInList = authList.users.some(u => u.id === userId);
+      }
+      
+      return res.json({
+        success: true,
+        user: {
+          id: userData.user.id,
+          email: userData.user.email,
+          metadata: userData.user.user_metadata
+        },
+        hasAccess,
+        accessData: hasAccess ? accessData : null,
+        isInUsersList: isInList
+      });
+    } catch (error) {
+      console.error('Erro ao verificar acesso do usuário:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao verificar acesso do usuário',
+        error: error.message
       });
     }
   }

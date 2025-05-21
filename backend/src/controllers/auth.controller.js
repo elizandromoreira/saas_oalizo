@@ -14,52 +14,69 @@ class AuthController {
    */
   static async register(req, res) {
     try {
-      // Verificar erros de validação
+      // Validar entrada
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ 
-          success: false,
+          success: false, 
           errors: errors.array() 
         });
       }
       
-      const { email, password, name } = req.body;
+      const { email, password, name, phone, store_id } = req.body;
       
       // Registrar usuário no Supabase Auth
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          data: { 
+          data: {
             name,
-            role: 'user' // Role padrão para novos usuários
+            phone
           }
         }
       });
       
       if (error) throw error;
       
+      console.log('Usuário registrado com sucesso:', data.user.id);
+      
+      // Se o store_id for fornecido, solicitar acesso à loja
+      if (store_id) {
+        try {
+          // Adicionar usuário à loja com status pendente
+          const { error: accessError } = await supabaseAdmin
+            .from('user_store_access')
+            .insert({
+              user_id: data.user.id,
+              store_id,
+              role: 'staff', // Papel padrão para novos usuários
+              is_primary: false,
+              status: 'pending' // Status pendente, aguardando aprovação
+            });
+          
+          if (accessError) {
+            console.error('Erro ao solicitar acesso à loja:', accessError);
+          } else {
+            console.log(`Solicitação de acesso criada para a loja ${store_id}`);
+          }
+        } catch (storeError) {
+          console.error('Erro ao processar solicitação de acesso à loja:', storeError);
+          // Continuamos mesmo se houver erro, pois o usuário já foi criado
+        }
+      }
+      
       res.status(201).json({
         success: true,
-        message: 'Usuário registrado com sucesso. Verifique seu email para confirmar a conta.',
+        message: 'Conta criada com sucesso! Verifique seu email para confirmar o cadastro.',
         user: {
           id: data.user.id,
-          email: data.user.email,
-          name: data.user.user_metadata?.name
+          email: data.user.email
         }
       });
     } catch (error) {
       console.error('Erro ao registrar usuário:', error);
-      
-      // Tratar erros específicos
-      if (error.message.includes('already registered')) {
-        return res.status(409).json({
-          success: false,
-          message: 'Email já está em uso'
-        });
-      }
-      
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
         message: 'Erro ao registrar usuário',
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -75,10 +92,9 @@ class AuthController {
   static async login(req, res) {
     try {
       // Verificar erros de validação
-      console.log('Tentativa de login recebida:', { email: req.body.email });
+      console.log('Tentativa de login:', req.body.email);
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        console.log('Erros de validação:', errors.array());
         return res.status(400).json({ 
           success: false,
           errors: errors.array() 
@@ -88,19 +104,16 @@ class AuthController {
       const { email, password } = req.body;
       
       // Autenticar usuário no Supabase Auth
-      console.log('Tentando autenticar com Supabase');
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
       });
-      console.log('Resposta do Supabase:', { sucesso: !!data && !error, erro: error?.message });
       
       if (error) throw error;
       
       // Obtendo o usuário autenticado
       const user = data.user;
       
-      console.log('Verificando se o usuário é um SuperAdmin (platform_admin):', user.id);
       // Verificar se o usuário é um administrador da plataforma
       
       // Definir isPlatformAdmin como false por padrão
@@ -113,37 +126,24 @@ class AuthController {
           .select('id')
           .eq('user_id', user.id)
           .single();
-        
-        console.log('Resultado da consulta platform_admins:', {
-          platformAdmin,
-          error: adminError ? adminError.message : null,
-          errorCode: adminError ? adminError.code : null
-        });
 
         // Atualizar o valor de isPlatformAdmin com base na consulta
         isPlatformAdmin = !adminError && platformAdmin !== null;
-        console.log('isPlatformAdmin definido como:', isPlatformAdmin);
       } catch (error) {
-        console.error('Erro ao verificar se o usuário é um SuperAdmin:', error);
+        console.error('Erro ao verificar se o usuário é um SuperAdmin');
       }
       
-      // Não definimos isPlatformAdmin no token JWT
-      // Isso evita o redirecionamento para o painel de administração
-      
       // Gerar JWT personalizado
-      console.log('Gerando JWT personalizado');
       const token = jwt.sign(
         { 
           id: user.id, 
           email: user.email,
           role: user.user_metadata?.role || 'user',
           isPlatformAdmin: false // Sempre definir como false para evitar o redirecionamento
-          // Removemos isPlatformAdmin do token
         },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN }
       );
-      console.log('JWT gerado com sucesso, primeiros caracteres:', token.substring(0, 15) + '...');
       
       // Buscar lojas que o usuário tem acesso
       const { data: userStores, error: storesError } = await supabase
@@ -191,7 +191,7 @@ class AuthController {
         primaryStore
       });
     } catch (error) {
-      console.error('Erro ao autenticar usuário:', error);
+      console.error('Erro ao autenticar usuário:', error.message);
       
       // Tratar erros específicos
       if (error.message.includes('Invalid login credentials')) {
@@ -201,7 +201,6 @@ class AuthController {
         });
       }
       
-      console.error('Erro interno no login:', error);
       res.status(500).json({ 
         success: false,
         message: 'Erro ao autenticar usuário',

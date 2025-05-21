@@ -55,6 +55,7 @@ router.get(
       .withMessage('ID da loja inválido')
   ],
   storeContext,
+  checkStorePermission(['admin', 'user', 'owner']),
   StoreController.getStoreById
 );
 
@@ -173,6 +174,49 @@ router.put(
 );
 
 /**
+ * @route PUT /api/stores/:storeId/users/:userId/status
+ * @desc Atualiza o status de um usuário em uma loja
+ * @access Privado (owner, admin)
+ */
+router.put(
+  '/:storeId/users/:userId/status',
+  [
+    param('storeId')
+      .isUUID()
+      .withMessage('ID da loja inválido'),
+    param('userId')
+      .isUUID()
+      .withMessage('ID do usuário inválido'),
+    body('status')
+      .isIn(['active', 'pending', 'suspended'])
+      .withMessage('Status inválido')
+  ],
+  storeContext,
+  checkStorePermission(['owner', 'admin']),
+  StoreController.updateUserStatus
+);
+
+/**
+ * @route PUT /api/stores/:storeId/users/:userId/metadata
+ * @desc Atualiza os metadados de um usuário (nome, telefone, etc)
+ * @access Privado (owner, admin)
+ */
+router.put(
+  '/:storeId/users/:userId/metadata',
+  [
+    param('storeId')
+      .isUUID()
+      .withMessage('ID da loja inválido'),
+    param('userId')
+      .isUUID()
+      .withMessage('ID do usuário inválido')
+  ],
+  storeContext,
+  checkStorePermission(['owner', 'admin']),
+  StoreController.updateUserMetadata
+);
+
+/**
  * @route DELETE /api/stores/:storeId/users/:userId
  * @desc Remove um usuário de uma loja
  * @access Privado (admin ou owner)
@@ -207,6 +251,16 @@ router.delete(
   storeContext,
   checkStorePermission(['owner']),
   StoreController.deleteStore
+);
+
+/**
+ * @route GET /api/stores/:storeId/user/:userId/check
+ * @desc Verificação de diagnóstico para um usuário específico
+ * @access Privado (owner, admin)
+ */
+router.get(
+  '/:storeId/user/:userId/check',
+  StoreController.checkUserAccess
 );
 
 module.exports = router;

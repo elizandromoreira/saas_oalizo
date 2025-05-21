@@ -8,7 +8,9 @@ import {
   UserIcon,
   PlusIcon,
   TrashIcon,
-  PencilIcon
+  PencilIcon,
+  CheckIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 import Modal from '../../components/Modal';
 
@@ -25,7 +27,11 @@ const StoreUsersPage = () => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [formData, setFormData] = useState({
     email: '',
-    role: 'staff'
+    role: 'staff',
+    name: '',
+    phone: '',
+    password: '',
+    createNewUser: false
   });
   const [processing, setProcessing] = useState(false);
   
@@ -79,7 +85,11 @@ const StoreUsersPage = () => {
   const handleAddUser = () => {
     setFormData({
       email: '',
-      role: 'staff'
+      role: 'staff',
+      name: '',
+      phone: '',
+      password: '',
+      createNewUser: false
     });
     setAddUserModalOpen(true);
   };
@@ -88,7 +98,9 @@ const StoreUsersPage = () => {
   const handleEditUser = (user) => {
     setSelectedUser(user);
     setFormData({
-      role: user.role
+      role: user.role,
+      name: user.name || '',
+      phone: user.phone || ''
     });
     setEditUserModalOpen(true);
   };
@@ -99,6 +111,12 @@ const StoreUsersPage = () => {
     
     if (!formData.email) {
       toast.error('Email is required');
+      return;
+    }
+    
+    // Validar senha se estiver criando um novo usuário
+    if (formData.createNewUser && !formData.password) {
+      toast.error('Password is required for new users');
       return;
     }
     
@@ -115,8 +133,10 @@ const StoreUsersPage = () => {
           id: data.access.user.id,
           email: data.access.user.email,
           name: data.access.user.name,
+          phone: data.access.user.phone,
           role: data.access.role,
           is_primary: data.access.is_primary,
+          status: data.access.status || 'active',
           access_id: data.access.id,
           created_at: data.access.created_at
         };
@@ -143,23 +163,42 @@ const StoreUsersPage = () => {
     try {
       setProcessing(true);
       
-      const { data } = await storeService.updateUserRole(storeId, selectedUser.id, { role: formData.role });
+      // Verificar se o usuário está editando a si mesmo
+      const isCurrentUser = selectedUser.id === JSON.parse(localStorage.getItem('user') || '{}').id;
       
-      if (data.success) {
-        toast.success('User role updated successfully!');
+      // Atualizar a role (apenas se não for o próprio usuário)
+      if (!isCurrentUser) {
+        const { data: roleData } = await storeService.updateUserRole(storeId, selectedUser.id, formData.role);
         
-        // Update user in the list
-        setUsers(prev => prev.map(user => 
-          user.id === selectedUser.id ? { ...user, role: formData.role } : user
-        ));
-        
-        setEditUserModalOpen(false);
-      } else {
-        toast.error(data.message || 'Error updating user role');
+        if (!roleData.success) {
+          throw new Error(roleData.message || 'Error updating user role');
+        }
       }
+      
+      // Atualizar metadados do usuário (nome e telefone)
+      const userData = {
+        name: formData.name,
+        phone: formData.phone
+      };
+      
+      const { data: userDataResponse } = await storeService.updateUserMetadata(storeId, selectedUser.id, userData);
+      
+      toast.success('Dados do usuário atualizados com sucesso!');
+      
+      // Atualizar usuário na lista
+      setUsers(prev => prev.map(user => 
+        user.id === selectedUser.id ? { 
+          ...user, 
+          role: isCurrentUser ? user.role : formData.role, // Manter a role atual se for o próprio usuário
+          name: formData.name,
+          phone: formData.phone
+        } : user
+      ));
+      
+      setEditUserModalOpen(false);
     } catch (error) {
-      console.error('Error updating user role:', error);
-      toast.error(error.response?.data?.message || 'Error updating user role');
+      console.error('Error updating user:', error);
+      toast.error(error.response?.data?.message || 'Error updating user');
     } finally {
       setProcessing(false);
     }
@@ -192,6 +231,35 @@ const StoreUsersPage = () => {
     }
   };
   
+  // Handle update status
+  const handleUpdateStatus = async (userId, newStatus) => {
+    if (!window.confirm(`Tem certeza que deseja alterar o status deste usuário para "${newStatus}"?`)) {
+      return;
+    }
+    
+    try {
+      setProcessing(true);
+      
+      const { data } = await storeService.updateUserStatus(storeId, userId, newStatus);
+      
+      if (data.success) {
+        toast.success('Status do usuário atualizado com sucesso!');
+        
+        // Atualizar o usuário na lista
+        setUsers(prev => prev.map(user => 
+          user.id === userId ? { ...user, status: newStatus } : user
+        ));
+      } else {
+        toast.error(data.message || 'Erro ao atualizar status do usuário');
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar status do usuário:', error);
+      toast.error(error.response?.data?.message || 'Erro ao atualizar status do usuário');
+    } finally {
+      setProcessing(false);
+    }
+  };
+  
   // Get role badge color
   const getRoleBadgeColor = (role) => {
     switch (role) {
@@ -203,6 +271,20 @@ const StoreUsersPage = () => {
         return 'bg-blue-100 text-blue-800';
       case 'staff':
         return 'bg-green-100 text-green-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+  
+  // Get status badge color
+  const getStatusBadgeColor = (status) => {
+    switch (status) {
+      case 'active':
+        return 'bg-green-100 text-green-800';
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'suspended':
+        return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -294,6 +376,11 @@ const StoreUsersPage = () => {
                         <div className="text-sm text-gray-500">
                           {user.email}
                         </div>
+                        {user.phone && (
+                          <div className="text-xs text-gray-400">
+                            {user.phone}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -308,23 +395,62 @@ const StoreUsersPage = () => {
                         Primary
                       </span>
                     )}
+                    {user.status && (
+                      <span className={`px-2 ml-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadgeColor(user.status)}`}>
+                        {user.status.charAt(0).toUpperCase() + user.status.slice(1)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(user.created_at).toLocaleDateString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    {hasPermission(['owner']) && user.id !== currentStore?.user_id && (
+                    {hasPermission(['owner', 'admin']) && user.id !== currentStore?.user_id && (
                       <div className="flex justify-end space-x-2">
                         <button
                           onClick={() => handleEditUser(user)}
                           className="text-indigo-600 hover:text-indigo-900"
+                          title="Editar função"
                         >
                           <PencilIcon className="h-5 w-5" />
                         </button>
+                        
+                        {/* Botões de gerenciamento de status */}
+                        {user.status === 'pending' && (
+                          <button
+                            onClick={() => handleUpdateStatus(user.id, 'active')}
+                            className="text-green-600 hover:text-green-900"
+                            title="Aprovar usuário"
+                          >
+                            <CheckIcon className="h-5 w-5" />
+                          </button>
+                        )}
+                        
+                        {user.status === 'active' && (
+                          <button
+                            onClick={() => handleUpdateStatus(user.id, 'suspended')}
+                            className="text-red-600 hover:text-red-900"
+                            title="Suspender usuário"
+                          >
+                            <XMarkIcon className="h-5 w-5" />
+                          </button>
+                        )}
+                        
+                        {user.status === 'suspended' && (
+                          <button
+                            onClick={() => handleUpdateStatus(user.id, 'active')}
+                            className="text-green-600 hover:text-green-900"
+                            title="Reativar usuário"
+                          >
+                            <CheckIcon className="h-5 w-5" />
+                          </button>
+                        )}
+                        
                         <button
                           onClick={() => handleRemoveUser(user.id)}
                           className="text-red-600 hover:text-red-900"
                           disabled={processing}
+                          title="Remover usuário"
                         >
                           <TrashIcon className="h-5 w-5" />
                         </button>
@@ -341,17 +467,30 @@ const StoreUsersPage = () => {
       <div className="mt-8 bg-blue-50 rounded-lg p-4 border border-blue-100">
         <h3 className="text-lg font-medium text-blue-800 mb-2 flex items-center">
           <InformationCircleIcon className="h-5 w-5 mr-1" />
-          About User Roles
+          Sobre Funções e Status de Usuários
         </h3>
         <p className="text-blue-700 mb-2">
-          Users can have different roles in a store, each with different permissions:
+          Usuários podem ter diferentes funções e status em uma loja:
         </p>
-        <ul className="list-disc list-inside text-blue-700 ml-4">
-          <li className="mb-1"><strong>Owner:</strong> Full access to all store settings and can manage users</li>
-          <li className="mb-1"><strong>Admin:</strong> Can manage products, orders, and invite users</li>
-          <li className="mb-1"><strong>Manager:</strong> Can manage products and orders</li>
-          <li><strong>Staff:</strong> Can view products and orders</li>
-        </ul>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <h4 className="font-medium text-blue-800 mb-1">Funções:</h4>
+            <ul className="list-disc list-inside text-blue-700 ml-4">
+              <li className="mb-1"><strong>Owner:</strong> Acesso completo a todas as configurações e gerenciar usuários</li>
+              <li className="mb-1"><strong>Admin:</strong> Pode gerenciar produtos, pedidos e convidar usuários</li>
+              <li className="mb-1"><strong>Manager:</strong> Pode gerenciar produtos e pedidos</li>
+              <li><strong>Staff:</strong> Pode visualizar produtos e pedidos</li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="font-medium text-blue-800 mb-1">Status:</h4>
+            <ul className="list-disc list-inside text-blue-700 ml-4">
+              <li className="mb-1"><strong>Active:</strong> Usuário aprovado com acesso completo</li>
+              <li className="mb-1"><strong>Pending:</strong> Usuário aguardando aprovação</li>
+              <li><strong>Suspended:</strong> Acesso do usuário temporariamente suspenso</li>
+            </ul>
+          </div>
+        </div>
       </div>
       
       {/* Add User Modal */}
@@ -376,6 +515,70 @@ const StoreUsersPage = () => {
                 placeholder="Enter user's email address"
                 required
               />
+            </div>
+            
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+                Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                className="w-full border border-gray-300 rounded px-3 py-2"
+                placeholder="Enter user's name"
+              />
+            </div>
+            
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+                Phone Number
+              </label>
+              <input
+                type="tel"
+                id="phone"
+                name="phone"
+                value={formData.phone}
+                onChange={handleChange}
+                className="w-full border border-gray-300 rounded px-3 py-2"
+                placeholder="Enter user's phone number"
+              />
+            </div>
+            
+            <div className="border-t border-gray-200 pt-4 mt-4">
+              <div className="flex items-center mb-3">
+                <input
+                  type="checkbox"
+                  id="createNewUser"
+                  name="createNewUser"
+                  checked={formData.createNewUser}
+                  onChange={(e) => setFormData(prev => ({ ...prev, createNewUser: e.target.checked }))}
+                  className="h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                />
+                <label htmlFor="createNewUser" className="ml-2 block text-sm font-medium text-gray-700">
+                  Create new user
+                </label>
+              </div>
+              
+              {formData.createNewUser && (
+                <div>
+                  <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                    Password *
+                  </label>
+                  <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    className="w-full border border-gray-300 rounded px-3 py-2"
+                    placeholder="Enter password for new user"
+                    required={formData.createNewUser}
+                  />
+                </div>
+              )}
             </div>
             
             <div>
@@ -440,11 +643,11 @@ const StoreUsersPage = () => {
       <Modal
         isOpen={editUserModalOpen}
         onClose={() => setEditUserModalOpen(false)}
-        title="Edit User Role"
+        title="Edit User"
       >
         {selectedUser && (
           <form onSubmit={handleEditUserSubmit}>
-            <div className="mb-4">
+            <div className="space-y-4">
               <div className="flex items-center mb-4">
                 <div className="flex-shrink-0 h-12 w-12 bg-gray-200 rounded-full flex items-center justify-center">
                   <span className="text-gray-500 font-medium text-lg">
@@ -462,15 +665,48 @@ const StoreUsersPage = () => {
               </div>
               
               <div>
+                <label htmlFor="edit-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Nome
+                </label>
+                <input
+                  type="text"
+                  id="edit-name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  className="w-full border border-gray-300 rounded px-3 py-2"
+                  placeholder="Nome do usuário"
+                />
+              </div>
+              
+              <div>
+                <label htmlFor="edit-phone" className="block text-sm font-medium text-gray-700 mb-1">
+                  Telefone
+                </label>
+                <input
+                  type="tel"
+                  id="edit-phone"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleChange}
+                  className="w-full border border-gray-300 rounded px-3 py-2"
+                  placeholder="Telefone do usuário"
+                />
+              </div>
+              
+              <div>
                 <label htmlFor="edit-role" className="block text-sm font-medium text-gray-700 mb-1">
-                  Role
+                  Função
                 </label>
                 <select
                   id="edit-role"
                   name="role"
                   value={formData.role}
                   onChange={handleChange}
-                  className="w-full border border-gray-300 rounded px-3 py-2"
+                  className={`w-full border border-gray-300 rounded px-3 py-2 ${
+                    selectedUser.id === JSON.parse(localStorage.getItem('user') || '{}').id ? 'bg-gray-100' : ''
+                  }`}
+                  disabled={selectedUser.id === JSON.parse(localStorage.getItem('user') || '{}').id}
                 >
                   <option value="staff">Staff</option>
                   <option value="manager">Manager</option>
@@ -479,6 +715,9 @@ const StoreUsersPage = () => {
                     <option value="owner">Owner</option>
                   )}
                 </select>
+                {selectedUser.id === JSON.parse(localStorage.getItem('user') || '{}').id && (
+                  <p className="text-sm text-yellow-600 mt-1">Não é possível alterar sua própria função.</p>
+                )}
               </div>
             </div>
             
@@ -488,7 +727,7 @@ const StoreUsersPage = () => {
                 onClick={() => setEditUserModalOpen(false)}
                 className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded"
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 type="submit"
@@ -503,10 +742,10 @@ const StoreUsersPage = () => {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Saving...
+                    Salvando...
                   </>
                 ) : (
-                  'Save Changes'
+                  'Salvar Alterações'
                 )}
               </button>
             </div>
