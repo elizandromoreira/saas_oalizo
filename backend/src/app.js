@@ -71,14 +71,16 @@ app.use((err, req, res, next) => {
 });
 
 // Iniciar o servidor
-app.listen(PORT, async () => {
-  console.log(`Servidor rodando na porta ${PORT} em modo ${process.env.NODE_ENV}`);
-  
+app.listen(PORT, "0.0.0.0", async () => {
+  console.log(
+    `Servidor rodando na porta ${PORT} em modo ${process.env.NODE_ENV}`
+  );
+
   // Add missing columns to stores table if they don't exist
   try {
     await addMissingColumnsToStoresTable();
   } catch (error) {
-    console.error('Error adding missing columns to stores table:', error);
+    console.error("Error adding missing columns to stores table:", error);
   }
 });
 
