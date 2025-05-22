@@ -11,7 +11,8 @@
 
 ## 📋 Description
 
-[Add your project description here]
+Multi-Store SaaS, which is in its DEMO version.
+
 
 ## 🏗️ Architecture
 
